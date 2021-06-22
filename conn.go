@@ -429,11 +429,16 @@ func (c *Conn) loop(ctx context.Context) {
 		err := c.authenticate()
 		switch {
 		case err == ErrSessionExpired:
-			c.logger.Printf("authentication failed: %s", err)
+			c.logger.Printf("authentication expired: %s", err)
+			c.resetSession()
 			c.invalidateWatches(err)
 		case err != nil && c.conn != nil:
 			c.logger.Printf("authentication failed: %s", err)
 			c.conn.Close()
+			if err == io.EOF {
+				// the session has expired or the cluster has lost the session state (instance reset, redeploy, etc)
+				c.resetSession()
+			}
 		case err == nil:
 			if c.logInfo {
 				c.logger.Printf("authenticated: id=%d, timeout=%d", c.SessionID(), c.sessionTimeoutMs)
@@ -672,9 +677,6 @@ func (c *Conn) authenticate() error {
 		return err
 	}
 	if r.SessionID == 0 {
-		atomic.StoreInt64(&c.sessionID, int64(0))
-		c.passwd = emptyPassword
-		c.lastZxid = 0
 		c.setState(StateExpired)
 		return ErrSessionExpired
 	}
@@ -685,6 +687,12 @@ func (c *Conn) authenticate() error {
 	c.setState(StateHasSession)
 
 	return nil
+}
+
+func (c *Conn) resetSession() {
+	atomic.StoreInt64(&c.sessionID, int64(0))
+	c.passwd = emptyPassword
+	c.lastZxid = 0
 }
 
 func (c *Conn) sendData(req *request) error {

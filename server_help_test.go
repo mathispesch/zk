@@ -36,8 +36,8 @@ type TestCluster struct {
 
 // TODO: pull this into its own package to allow for better isolation of integration tests vs. unit
 // testing. This should be used on CI systems and local only when needed whereas unit tests should remain
-// fast and not rely on external dependecies.
-func StartTestCluster(t *testing.T, size int, stdout, stderr io.Writer) (*TestCluster, error) {
+// fast and not rely on external dependencies.
+func StartTestCluster(t *testing.T, size int, stdout, stderr io.Writer, startPort *int) (*TestCluster, error) {
 	if testing.Short() {
 		t.Skip("ZK cluster tests skipped in short case.")
 	}
@@ -56,7 +56,10 @@ func StartTestCluster(t *testing.T, size int, stdout, stderr io.Writer) (*TestCl
 	requireNoError(t, err, "failed to create tmp dir for test server setup")
 
 	success := false
-	startPort := int(rand.Int31n(6000) + 10000)
+	if startPort == nil {
+		p := int(rand.Int31n(6000) + 10000)
+		startPort = &p
+	}
 	cluster := &TestCluster{Path: tmpPath}
 
 	defer func() {
@@ -69,7 +72,7 @@ func StartTestCluster(t *testing.T, size int, stdout, stderr io.Writer) (*TestCl
 		srvPath := filepath.Join(tmpPath, fmt.Sprintf("srv%d", serverN+1))
 		requireNoError(t, os.Mkdir(srvPath, 0700), "failed to make server path")
 
-		port := startPort + serverN*3
+		port := *startPort + serverN*3
 		cfg := ServerConfig{
 			ClientPort: port,
 			DataDir:    srvPath,
@@ -79,8 +82,8 @@ func StartTestCluster(t *testing.T, size int, stdout, stderr io.Writer) (*TestCl
 			serverNConfig := ServerConfigServer{
 				ID:                 i + 1,
 				Host:               "127.0.0.1",
-				PeerPort:           startPort + i*3 + 1,
-				LeaderElectionPort: startPort + i*3 + 2,
+				PeerPort:           *startPort + i*3 + 1,
+				LeaderElectionPort: *startPort + i*3 + 2,
 			}
 
 			cfg.Servers = append(cfg.Servers, serverNConfig)
@@ -152,6 +155,20 @@ func (tc *TestCluster) Stop() error {
 	}
 	defer os.RemoveAll(tc.Path)
 	return tc.waitForStop(5, time.Second)
+}
+
+func (tc *TestCluster) Restart(delay time.Duration) (err error) {
+	for _, srv := range tc.Servers {
+		srv.Srv.Stop()
+	}
+	if err = tc.waitForStop(5, time.Second); err != nil {
+		return err
+	}
+	time.Sleep(delay)
+	for _, srv := range tc.Servers {
+		srv.Srv.Start()
+	}
+	return tc.waitForStart(30, time.Second)
 }
 
 // waitForStart blocks until the cluster is up
